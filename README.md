@@ -2,7 +2,7 @@
 A simple Discord bot which is a Warden of Words!
 
 ## What does it do?
-This bot is basically a meme, as it allows people to just own and trade in words. Be the first to say a word and it is yours.. Wanna sell it? Go ahead lol
+This bot is basically a meme, as it allows people to just own and trade in words. Be the first to say a word and it is yours.. Wanna sell your word(s)? Go ahead lol
 
 ## License
 This work is licensed under a [Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License](https://creativecommons.org/licenses/by-nc-sa/4.0/)\
