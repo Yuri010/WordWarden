@@ -1,8 +1,10 @@
-# version 1.0.0
+# Update 1.0.1
 import discord
 from discord.ext import commands
 from discord.ext.commands import has_permissions
 import sqlite3
+import asyncio
+import random
 
 # Define the main variables
 intents = discord.Intents.default()
@@ -82,17 +84,23 @@ async def on_message(message):
                     await message.delete()
 
                     # Send notification embed
+                    channel = message.channel
                     embed = discord.Embed(
-                        title='Word Already Taken',
+                        title=':x: Word Already Taken',
                         description=f'The word "{word}" is already claimed by {owner}.',
                         color=discord.Color.red()
                     )
                     if for_sale:
-                        embed.add_field(name='For Sale', value='This word is up for sale.', inline=False)
+                        embed.add_field(name='For Sale', value='This word is up for sale though, just buy it so you can use it ig.', inline=False)
                     else:
-                        embed.add_field(name='Not for Sale', value='This word is not up for sale.', inline=False)
+                        embed.add_field(name='Not for Sale', value='This word is not up for sale either.. Find an alternative instead', inline=False)
+                    notification_message = await channel.send(f'{message.author.mention}', embed=embed)
 
-                    await message.author.send(embed=embed)
+                    # Add a lock emoji reaction to the notification message
+                    try:
+                        await notification_message.add_reaction('🔒')
+                    except discord.NotFound:
+                        pass
 
         if claimed_words:
             for word in claimed_words:
@@ -100,8 +108,12 @@ async def on_message(message):
                           (word, message.author.name, False, 0))
                 conn.commit()
 
-                await message.add_reaction('🔒')  # Add lock emoji to the message
-        
+                # Add a lock emoji reaction to the original message
+                try:
+                    await message.add_reaction('🔒')
+                except discord.NotFound:
+                    pass
+
         # Check if the user exists in the user_funds table
         c.execute('SELECT * FROM user_funds WHERE user_id=?', (message.author.id,))
         user_funds = c.fetchone()
@@ -111,6 +123,34 @@ async def on_message(message):
             conn.commit()
 
     await bot.process_commands(message)
+
+@bot.event
+async def on_message_edit(before, after):
+    if before.content != after.content:
+        c.execute('SELECT word, owner, for_sale FROM claimed_words WHERE owner = ?', (before.author.name,))
+        claimed_words = c.fetchall()
+
+        for word, owner, for_sale in claimed_words:
+            if word.lower() in after.content.lower():
+                # Delete the user's message containing the word they don't own
+                await after.delete()
+
+                embed = discord.Embed(
+                    title=':x: Word Already Taken',
+                    description=f'The word "{word}" is already claimed by {owner}.',
+                    color=discord.Color.red()
+                )
+                if for_sale:
+                    embed.add_field(name='For Sale', value='This word is up for sale though, just buy it so you can use it ig.', inline=False)
+                else:
+                    embed.add_field(name='Not for Sale', value='This word is not up for sale either.. Find an alternative instead', inline=False)
+
+                notification_msg = await after.channel.send(f'{after.author.mention}', embed=embed)
+                await asyncio.sleep(5)  # Wait for 5 seconds
+                await notification_msg.delete()
+                break  # Break out of the loop after deleting the message
+
+    await bot.process_commands(after)
 
 @bot.command()
 async def sell(ctx, word, price: int):
@@ -139,7 +179,7 @@ async def sell_error(ctx, error):
     if isinstance(error, commands.MissingRequiredArgument):
         embed = discord.Embed(
             title=':x: Missing Argument',
-            description='Please provide the word you want to sell. Example: `&sell [word]`.',
+            description='Please provide the word you want to sell. Example: `&sell [word] [price]`.',
             color=discord.Color.red()
         )
         await ctx.send(embed=embed)
@@ -148,39 +188,77 @@ async def sell_error(ctx, error):
 async def buy(ctx, word):
     c.execute('SELECT * FROM claimed_words WHERE word=?', (word,))
     existing_word = c.fetchone()
-    if existing_word and existing_word[1] != ctx.author.name and existing_word[2] and existing_word[3] > 0:
+    if existing_word:
         owner = existing_word[1]
-        c.execute('SELECT * FROM user_funds WHERE user_id=?', (ctx.author.id,))
-        user_funds = c.fetchone()
-        if user_funds and user_funds[1] >= existing_word[3]:
-            # Update the word's owner
-            c.execute('UPDATE claimed_words SET owner=?, for_sale=?, price=? WHERE word=?',
-                      (ctx.author.name, False, 0, word))
-            # Update the buyer's funds
-            new_funds = user_funds[1] - existing_word[3]
-            c.execute('UPDATE user_funds SET tokens=? WHERE user_id=?', (new_funds, ctx.author.id))
-            # Update the seller's funds
-            c.execute('SELECT * FROM user_funds WHERE user_id=?', (owner,))
-            seller_funds = c.fetchone()
-            new_funds = seller_funds[1] + existing_word[3]
-            c.execute('UPDATE user_funds SET tokens=? WHERE user_id=?', (new_funds, owner))
-            conn.commit()
+        for_sale = existing_word[2]
+        price = existing_word[3]
+        user_id = ctx.author.id
 
-            embed = discord.Embed(
-                title=':white_check_mark: Word Purchased',
-                description=f'{word} has been purchased by {ctx.author.name} from {owner}! 🔒',
-                color=discord.Color.green()
-            )
+        if owner == ctx.author.name:
+            if for_sale:
+                # Reclaim the word
+                c.execute('UPDATE claimed_words SET for_sale=?, price=? WHERE word=?',
+                          (False, 0, word))
+                conn.commit()
+
+                embed = discord.Embed(
+                    title=':white_check_mark: Word Reclaimed',
+                    description=f'"{word}" has been reclaimed by {ctx.author.name}. It is no longer for sale. 🔒',
+                    color=discord.Color.green()
+                )
+            else:
+                embed = discord.Embed(
+                    title=':x: Word Not for Sale',
+                    description=f'{word} is not currently for sale.',
+                    color=discord.Color.red()
+                )
         else:
-            embed = discord.Embed(
-                title=':x: Insufficient Funds',
-                description='You have insufficient funds to buy the word.',
-                color=discord.Color.red()
-            )
+            if for_sale and price > 0:
+                c.execute('SELECT * FROM user_funds WHERE user_id=?', (user_id,))
+                user_funds = c.fetchone()
+                if user_funds and user_funds[1] >= price:
+                    # Update the word's owner
+                    c.execute('UPDATE claimed_words SET owner=?, for_sale=?, price=? WHERE word=?',
+                              (ctx.author.name, False, 0, word))
+                    # Update the buyer's funds
+                    new_funds = user_funds[1] - price
+                    c.execute('UPDATE user_funds SET tokens=? WHERE user_id=?', (new_funds, user_id))
+                    # Update the seller's funds
+                    c.execute('SELECT * FROM user_funds WHERE user_id=?', (owner,))
+                    seller_funds = c.fetchone()
+                    new_funds = seller_funds[1] + price
+                    c.execute('UPDATE user_funds SET tokens=? WHERE user_id=?', (new_funds, owner))
+                    conn.commit()
+                    mock_messages = [
+                        f'{ctx.author.name} be like: {word} is mine now! Muahahaha!',
+                        f'Can you believe this user actually paid for the word `{word}`? Imagine buying pixels smh',
+                        f'Congratulations on your purchase of permission to speak, who thought that would be possible in the future?!',
+                        f'Did you really just buy a word to just use in this one channel? Have fun ig',
+                    ]
+                    mock_message = random.choice(mock_messages)
+                    embed = discord.Embed(
+                        title=':white_check_mark: Word Purchased',
+                        description=f'{word} has been purchased by {ctx.author.name} from {owner}! 🔒\n{mock_message}',
+                        color=discord.Color.green()
+                    )
+                    await ctx.send(embed=embed)
+                    return
+                else:
+                    embed = discord.Embed(
+                        title=':x: Insufficient Funds',
+                        description='You have insufficient funds to buy the word.',
+                        color=discord.Color.red()
+                    )
+            else:
+                embed = discord.Embed(
+                    title=':x: Invalid Word',
+                    description=f'{word} is either not a claimed word or you already own it.',
+                    color=discord.Color.red()
+                )
     else:
         embed = discord.Embed(
             title=':x: Invalid Word',
-            description=f'{word} is either not a claimed word or you already own it.',
+            description=f'{word} is not a claimed word.',
             color=discord.Color.red()
         )
     await ctx.send(embed=embed)
@@ -202,21 +280,21 @@ async def marketplace(ctx, page: int = 1):
     total_words = c.fetchone()[0]
     total_pages = (total_words + per_page - 1) // per_page
 
-    if page > total_pages:
-        await ctx.send(f'Invalid page number. Please enter a value between 1 and {total_pages}.')
-        return
-    
     if total_pages < 1:
-        embed = discord.Embed(title='Word Marketplace', description='Nothing here but crickets...',
+        embed = discord.Embed(title=':shopping_cart: Word Marketplace', description='Nothing here but crickets...',
                               color=discord.Color.red())
         await ctx.send(embed=embed)
+        return
+
+    if page > total_pages:
+        await ctx.send(f'Invalid page number. Please enter a value between 1 and {total_pages}.')
         return
 
     c.execute('SELECT word, owner, price FROM claimed_words WHERE for_sale=1 ORDER BY word LIMIT ?, ?',
               ((page - 1) * per_page, per_page))
     words = c.fetchall() 
 
-    embed = discord.Embed(title='Word Marketplace', color=discord.Color.red())
+    embed = discord.Embed(title=':shopping_cart: Word Marketplace', color=discord.Color.red())
 
     embed.add_field(name='Word', value='\n'.join(word[0] for word in words), inline=True)
     embed.add_field(name='Owner', value='\n'.join(f'@{word[1]}' for word in words), inline=True)
