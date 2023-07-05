@@ -1,3 +1,4 @@
+# Update 1.0.1
 import discord
 from discord.ext import commands
 from discord.ext.commands import has_permissions
