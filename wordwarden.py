@@ -98,7 +98,10 @@ async def on_message(message):
 
                     # Add a lock emoji reaction to the notification message
                     try:
-                        await notification_message.add_reaction('🔒')
+                        await asyncio.sleep(10)
+                        await notification_message.delete()
+                        return
+
                     except discord.NotFound:
                         pass
 
